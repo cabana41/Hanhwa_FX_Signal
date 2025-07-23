@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from collections import defaultdict
+import io
 
 # 페이지 설정
 st.set_page_config(
@@ -83,61 +85,6 @@ def calculate_13612_momentum(data_mod, data_cal):
 
     return df_mom
 
-def plot_13612_momentum(df_mom):
-    """13612 모멘텀 차트 생성"""
-    df = df_mom.copy().reset_index()
-    df['d0'] = pd.to_datetime(df['d0'])
-
-    fig = go.Figure()
-
-    # Spot Line Chart
-    fig.add_trace(go.Scatter(
-        x=df['d0'],
-        y=df['p0'],
-        mode='lines',
-        name='USD/KRW Spot',
-        line=dict(color='royalblue', width=2)
-    ))
-
-    # Signal ON
-    df_sig1 = df[df['signal_5d'] == 1]
-    fig.add_trace(go.Bar(
-        x=df_sig1['d0'],
-        y=[1]*len(df_sig1),
-        name='Signal ON',
-        marker_color='crimson',
-        opacity=0.9,
-        yaxis='y2'
-    ))
-
-    # Signal OFF
-    df_sig0 = df[df['signal_5d'] == 0]
-    fig.add_trace(go.Bar(
-        x=df_sig0['d0'],
-        y=[1]*len(df_sig0),
-        name='Signal OFF',
-        marker_color='lightgray',
-        opacity=0.3,
-        yaxis='y2'
-    ))
-
-    fig.update_layout(
-        title='USD/KRW Spot & Hedge Signal (13612 Filtered Momentum)',
-        xaxis_title='Date',
-        yaxis=dict(title='USD/KRW Spot'),
-        yaxis2=dict(
-            title='Signal',
-            overlaying='y',
-            side='right',
-            range=[0, 1.0],
-            showgrid=False
-        ),
-        legend=dict(x=0.01, y=0.99),
-        height=500
-    )
-
-    return fig
-
 def calculate_macd(data_mod):
     """MACD 계산"""
     df = data_mod.copy()
@@ -173,63 +120,6 @@ def calculate_macd(data_mod):
 
     return df
 
-def plot_macd(df):
-    """MACD 차트 생성"""
-    df = df.copy().dropna(subset=['Spot', 'MACD_state_5d']).copy()
-    df = df.reset_index()
-
-    # 시그널 분리
-    df_on = df[df['MACD_state_5d'] == 1]
-    df_off = df[df['MACD_state_5d'] == 0]
-
-    fig = go.Figure()
-
-    # Spot 환율
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=df['Spot'],
-        name='USD/KRW Spot',
-        mode='lines',
-        line=dict(color='royalblue', width=2)
-    ))
-
-    # Signal ON
-    fig.add_trace(go.Bar(
-        x=df_on.index,
-        y=[1] * len(df_on),
-        name='Signal ON (5d)',
-        marker_color='crimson',
-        opacity=0.8,
-        yaxis='y2'
-    ))
-
-    # Signal OFF
-    fig.add_trace(go.Bar(
-        x=df_off.index,
-        y=[1] * len(df_off),
-        name='Signal OFF',
-        marker_color='lightgray',
-        opacity=0.4,
-        yaxis='y2'
-    ))
-
-    fig.update_layout(
-        title='USD/KRW Spot with MACD 5-day Confirmed Signal',
-        xaxis_title='Date',
-        yaxis=dict(title='USD/KRW Spot'),
-        yaxis2=dict(
-            title='5-day Signal',
-            overlaying='y',
-            side='right',
-            range=[0, 1.0],
-            showgrid=False
-        ),
-        legend=dict(x=0.01, y=0.99),
-        height=500
-    )
-
-    return fig
-
 def calculate_basis_momentum(data):
     """Basis Momentum 계산"""
     data_mod = data.dropna()
@@ -238,7 +128,11 @@ def calculate_basis_momentum(data):
     full_dates = pd.date_range(start=data_mod.index.min(), end=data_mod.index.max(), freq='D')
     data_cal = data_mod.reindex(full_dates, method='ffill')
     data_mon = data_cal.resample('M').last()
-    data_mon = data_mon.drop(index='2025-07-31').loc['2015-01-31':]
+
+    # 인덱스에서 2025-07-31이 있으면 제거
+    if '2025-07-31' in data_mon.index:
+        data_mon = data_mon.drop(index='2025-07-31')
+    data_mon = data_mon.loc['2015-01-31':]
 
     # basis 계산
     data_mon['basis'] = np.log(data_mon['FWD1M'] / data_mon['Spot'])
@@ -256,8 +150,148 @@ def calculate_basis_momentum(data):
 
     return data_mon_mod
 
-def plot_basis_momentum(df):
-    """Basis Momentum 차트 생성"""
+def create_composite_signal(df_mom, df_macd, df_basis):
+    """3단계 신호를 합성하여 누적 막대그래프용 데이터 생성"""
+    # 공통 날짜 범위 찾기
+    common_start = max(df_mom.index.min(), df_macd.index.min())
+    common_end = min(df_mom.index.max(), df_macd.index.max())
+
+    # 일간 데이터로 정렬
+    df_composite = pd.DataFrame(index=pd.date_range(common_start, common_end, freq='D'))
+
+    # 13612 시그널 (일간)
+    df_composite['signal_13612'] = df_mom.reindex(df_composite.index)['signal_5d'].fillna(method='ffill')
+
+    # MACD 시그널 (일간)
+    df_composite['signal_macd'] = df_macd.reindex(df_composite.index)['MACD_state_5d'].fillna(method='ffill')
+
+    # Basis 시그널 (월간을 일간으로 확장)
+    df_composite['signal_basis'] = 0
+    for date in df_composite.index:
+        # 해당 날짜의 월말 찾기
+        month_end = date + pd.offsets.MonthEnd(0)
+        if month_end in df_basis.index:
+            df_composite.loc[date, 'signal_basis'] = df_basis.loc[month_end, 'signal']
+        else:
+            # 가장 가까운 이전 월말 찾기
+            prev_month_ends = df_basis.index[df_basis.index <= month_end]
+            if len(prev_month_ends) > 0:
+                df_composite.loc[date, 'signal_basis'] = df_basis.loc[prev_month_ends[-1], 'signal']
+
+    # 환율 데이터 추가
+    df_composite['spot'] = df_mom.reindex(df_composite.index)['p0'].fillna(method='ffill')
+
+    # 누적 시그널 계산 (3단계)
+    df_composite['composite_signal'] = (
+        df_composite['signal_13612'].fillna(0) +
+        df_composite['signal_macd'].fillna(0) +
+        df_composite['signal_basis'].fillna(0)
+    )
+
+    return df_composite.dropna()
+
+def plot_composite_signal(df_composite):
+    """합성 시그널 누적 막대그래프"""
+    df = df_composite.copy()
+
+    fig = go.Figure()
+
+    # 환율 라인
+    fig.add_trace(go.Scatter(
+        x=df.index,
+        y=df['spot'],
+        mode='lines',
+        name='USD/KRW Spot',
+        line=dict(color='black', width=2)
+    ))
+
+    # 누적 막대그래프 - 3단계별 색상
+    colors = ['lightgray', '#ffcccc', '#ff6666', '#cc0000']  # 0, 1, 2, 3 시그널별 색상
+
+    for signal_level in [0, 1, 2, 3]:
+        df_level = df[df['composite_signal'] == signal_level]
+        if len(df_level) > 0:
+            fig.add_trace(go.Bar(
+                x=df_level.index,
+                y=[1] * len(df_level),
+                name=f'Signal Level {signal_level}',
+                marker_color=colors[signal_level],
+                opacity=0.7,
+                yaxis='y2'
+            ))
+
+    fig.update_layout(
+        title='USD/KRW Spot with Composite Signal (3-Stage Cumulative)',
+        xaxis_title='Date',
+        yaxis=dict(title='USD/KRW Spot'),
+        yaxis2=dict(
+            title='Signal Level',
+            overlaying='y',
+            side='right',
+            range=[0, 1.0],
+            showgrid=False
+        ),
+        legend=dict(x=0.01, y=0.99),
+        height=600
+    )
+
+    return fig
+
+def plot_individual_signal(df, signal_col, title):
+    """개별 시그널 차트"""
+    fig = go.Figure()
+
+    # 환율 라인
+    spot_col = 'p0' if 'p0' in df.columns else 'Spot'
+    fig.add_trace(go.Scatter(
+        x=df.index,
+        y=df[spot_col],
+        mode='lines',
+        name='USD/KRW Spot',
+        line=dict(color='royalblue', width=2)
+    ))
+
+    # Signal ON/OFF
+    df_on = df[df[signal_col] == 1]
+    df_off = df[df[signal_col] == 0]
+
+    fig.add_trace(go.Bar(
+        x=df_on.index,
+        y=[1] * len(df_on),
+        name='Signal ON',
+        marker_color='crimson',
+        opacity=0.8,
+        yaxis='y2'
+    ))
+
+    fig.add_trace(go.Bar(
+        x=df_off.index,
+        y=[1] * len(df_off),
+        name='Signal OFF',
+        marker_color='lightgray',
+        opacity=0.4,
+        yaxis='y2'
+    ))
+
+    fig.update_layout(
+        title=title,
+        xaxis_title='Date',
+        yaxis=dict(title='USD/KRW Spot'),
+        yaxis2=dict(
+            title='Signal',
+            overlaying='y',
+            side='right',
+            range=[0, 1.0],
+            showgrid=False
+        ),
+        legend=dict(x=0.01, y=0.99),
+        height=500
+    )
+
+    return fig
+
+def plot_basis_momentum_individual(df):
+    """Basis Momentum 개별 차트"""
     fig = go.Figure()
 
     # Spot 환율 라인
@@ -289,34 +323,50 @@ def plot_basis_momentum(df):
         xaxis_title='날짜',
         yaxis_title='USD/KRW Spot',
         height=600,
-        template='plotly_white',
-        margin=dict(t=80, b=40, l=60, r=40),
-        xaxis=dict(
-            showgrid=True,
-            showline=True,
-            linewidth=1,
-            linecolor='black',
-            mirror=True
-        ),
-        yaxis=dict(
-            range=[1000, df['Spot'].max() * 1.01],
-            showgrid=True,
-            zeroline=False,
-            showline=True,
-            linewidth=1,
-            linecolor='black',
-            mirror=True
-        ),
-        legend=dict(
-            orientation='h',
-            yanchor='bottom',
-            y=1.02,
-            xanchor='right',
-            x=1
-        )
+        template='plotly_white'
     )
 
     return fig
+
+def display_recent_signal_status(df, signal_col, signal_name):
+    """최근 시그널 상태 표시"""
+    if len(df) > 0:
+        latest_date = df.index[-1]
+        latest_signal = df[signal_col].iloc[-1]
+
+        # 날짜 포맷 (timestamp 제거)
+        if hasattr(latest_date, 'strftime'):
+            formatted_date = latest_date.strftime('%Y-%m-%d')
+        else:
+            formatted_date = str(latest_date).split(' ')[0]
+
+        signal_status = "🔴 ON" if latest_signal == 1 else "⚪ OFF"
+        signal_color = "red" if latest_signal == 1 else "gray"
+
+        st.markdown(f"""
+        <div style="background-color: #f0f2f6; padding: 15px; border-radius: 10px; margin-bottom: 20px;">
+            <h4>📅 최근 {signal_name} 시그널 상태</h4>
+            <p><strong>날짜:</strong> {formatted_date}</p>
+            <p><strong>시그널:</strong> <span style="color: {signal_color}; font-weight: bold;">{signal_status}</span></p>
+        </div>
+        """, unsafe_allow_html=True)
+
+def format_dataframe_dates(df):
+    """데이터프레임의 날짜 컬럼 포맷팅 (timestamp 제거)"""
+    df_formatted = df.copy()
+
+    # 인덱스가 날짜인 경우
+    if hasattr(df_formatted.index, 'strftime'):
+        df_formatted.index = df_formatted.index.strftime('%Y-%m-%d')
+
+    # 날짜 컬럼들 포맷팅
+    date_columns = ['d1', 'd3', 'd6', 'd12']
+    for col in date_columns:
+        if col in df_formatted.columns:
+            if hasattr(df_formatted[col], 'dt'):
+                df_formatted[col] = df_formatted[col].dt.strftime('%Y-%m-%d')
+
+    return df_formatted
 
 # 메인 애플리케이션
 def main():
@@ -335,102 +385,95 @@ def main():
         if data is not None:
             st.success("✅ 데이터가 성공적으로 로드되었습니다!")
 
-            # 분석 방법 선택
-            analysis_type = st.sidebar.selectbox(
-                "🔍 분석 방법 선택",
-                ["13612 Filtered Momentum", "MACD", "Basis Momentum"],
-                help="분석할 시그널 방법을 선택하세요"
-            )
-
             # 데이터 기본 정보
             st.sidebar.markdown("### 📊 데이터 정보")
             st.sidebar.write(f"**기간**: {data_mod.index.min().strftime('%Y-%m-%d')} ~ {data_mod.index.max().strftime('%Y-%m-%d')}")
             st.sidebar.write(f"**총 데이터 포인트**: {len(data_mod):,}개")
 
-            # 탭 생성
-            tab1, tab2, tab3 = st.tabs(["📈 차트 분석", "📋 데이터 테이블", "📊 통계"])
+            # 시그널 계산
+            with st.spinner('시그널을 계산 중입니다...'):
+                df_mom = calculate_13612_momentum(data_mod, data_cal)
+                df_macd = calculate_macd(data_mod)
 
-            if analysis_type == "13612 Filtered Momentum":
-                with st.spinner('13612 Momentum을 계산 중입니다...'):
-                    df_mom = calculate_13612_momentum(data_mod, data_cal)
-
-                with tab1:
-                    st.plotly_chart(plot_13612_momentum(df_mom), use_container_width=True)
-
-                    # 시그널 통계
-                    signal_stats = df_mom['signal_5d'].value_counts()
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("📊 총 관측일", len(df_mom))
-                    with col2:
-                        st.metric("🔴 헤지 신호 (ON)", signal_stats.get(1, 0))
-                    with col3:
-                        st.metric("⚪ 비헤지 신호 (OFF)", signal_stats.get(0, 0))
-
-                with tab2:
-                    st.dataframe(df_mom.tail(100), use_container_width=True)
-
-                with tab3:
-                    st.write("### 모멘텀 분포")
-                    fig_hist = go.Figure(data=[go.Histogram(x=df_mom['mom'], nbinsx=50)])
-                    fig_hist.update_layout(title='13612 Momentum 분포', xaxis_title='Momentum', yaxis_title='빈도')
-                    st.plotly_chart(fig_hist, use_container_width=True)
-
-            elif analysis_type == "MACD":
-                with st.spinner('MACD를 계산 중입니다...'):
-                    df_macd = calculate_macd(data_mod)
-
-                with tab1:
-                    st.plotly_chart(plot_macd(df_macd), use_container_width=True)
-
-                    # MACD 시그널 통계
-                    signal_stats = df_macd['MACD_state_5d'].value_counts()
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("📊 총 관측일", len(df_macd.dropna()))
-                    with col2:
-                        st.metric("🔴 헤지 신호 (ON)", signal_stats.get(1, 0))
-                    with col3:
-                        st.metric("⚪ 비헤지 신호 (OFF)", signal_stats.get(0, 0))
-
-                with tab2:
-                    st.dataframe(df_macd[['Spot', 'MACD', 'Signal', 'MACD_state', 'MACD_state_5d']].tail(100), use_container_width=True)
-
-                with tab3:
-                    st.write("### MACD 분포")
-                    fig_hist = go.Figure(data=[go.Histogram(x=df_macd['MACD'].dropna(), nbinsx=50)])
-                    fig_hist.update_layout(title='MACD 분포', xaxis_title='MACD', yaxis_title='빈도')
-                    st.plotly_chart(fig_hist, use_container_width=True)
-
-            elif analysis_type == "Basis Momentum":
+                # Basis momentum은 FWD 데이터가 있을 때만
+                df_basis = None
                 if 'FWD1M' in data.columns and 'FWD3M' in data.columns:
-                    with st.spinner('Basis Momentum을 계산 중입니다...'):
-                        df_basis = calculate_basis_momentum(data)
+                    df_basis = calculate_basis_momentum(data)
 
-                    with tab1:
-                        st.plotly_chart(plot_basis_momentum(df_basis), use_container_width=True)
+            # 탭 생성 (4개 탭)
+            if df_basis is not None:
+                tab1, tab2, tab3, tab4 = st.tabs(["📊 합성 시그널", "📈 13612 Momentum", "📉 MACD", "📋 Basis Momentum"])
 
-                        # Basis 시그널 통계
-                        signal_stats = df_basis['signal'].value_counts()
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("📊 총 관측 월", len(df_basis))
-                        with col2:
-                            st.metric("🔴 헤지 신호 (ON)", signal_stats.get(1, 0))
-                        with col3:
-                            st.metric("⚪ 비헤지 신호 (OFF)", signal_stats.get(0, 0))
+                # 합성 시그널 생성
+                df_composite = create_composite_signal(df_mom, df_macd, df_basis)
 
-                    with tab2:
-                        st.dataframe(df_basis[['Spot', 'FWD1M', 'FWD3M', 'basis', 'forward_basis', 'basis_momentum', 'signal']].tail(50), use_container_width=True)
+                with tab1:
+                    # 최근 합성 시그널 상태
+                    if len(df_composite) > 0:
+                        latest_date = df_composite.index[-1]
+                        latest_composite = df_composite['composite_signal'].iloc[-1]
+                        formatted_date = latest_date.strftime('%Y-%m-%d')
 
-                    with tab3:
-                        st.write("### Basis Momentum 분포")
-                        fig_hist = go.Figure(data=[go.Histogram(x=df_basis['basis_momentum'].dropna(), nbinsx=30)])
-                        fig_hist.update_layout(title='Basis Momentum 분포', xaxis_title='Basis Momentum', yaxis_title='빈도')
-                        st.plotly_chart(fig_hist, use_container_width=True)
-                else:
+                        st.markdown(f"""
+                        <div style="background-color: #f0f2f6; padding: 15px; border-radius: 10px; margin-bottom: 20px;">
+                            <h4>📅 최근 합성 시그널 상태</h4>
+                            <p><strong>날짜:</strong> {formatted_date}</p>
+                            <p><strong>합성 시그널:</strong> <span style="color: {'red' if latest_composite >= 2 else 'orange' if latest_composite == 1 else 'gray'}; font-weight: bold;">Level {int(latest_composite)}/3</span></p>
+                            <p><strong>13612:</strong> {'🔴' if df_composite['signal_13612'].iloc[-1] else '⚪'}
+                            <strong>MACD:</strong> {'🔴' if df_composite['signal_macd'].iloc[-1] else '⚪'}
+                            <strong>Basis:</strong> {'🔴' if df_composite['signal_basis'].iloc[-1] else '⚪'}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    st.plotly_chart(plot_composite_signal(df_composite), use_container_width=True)
+
+                    # 합성 시그널 통계
+                    signal_dist = df_composite['composite_signal'].value_counts().sort_index()
+                    cols = st.columns(4)
+                    for i, (level, count) in enumerate(signal_dist.items()):
+                        with cols[i]:
+                            st.metric(f"Level {int(level)}", count)
+
+            else:
+                tab1, tab2, tab3 = st.tabs(["📈 13612 Momentum", "📉 MACD", "❌ Basis (데이터 없음)"])
+
+            # 13612 Momentum 탭
+            tab_idx = 2 if df_basis is not None else 1
+            with (tab2 if df_basis is not None else tab1):
+                display_recent_signal_status(df_mom, 'signal_5d', '13612 Momentum')
+                st.plotly_chart(plot_individual_signal(df_mom, 'signal_5d', 'USD/KRW Spot & 13612 Filtered Momentum Signal'), use_container_width=True)
+
+                # 데이터 테이블 (내림차순, 날짜 포맷팅)
+                st.subheader("📋 최근 데이터")
+                df_display = format_dataframe_dates(df_mom.tail(50).iloc[::-1])  # 내림차순
+                st.dataframe(df_display, use_container_width=True)
+
+            # MACD 탭
+            with (tab3 if df_basis is not None else tab2):
+                display_recent_signal_status(df_macd, 'MACD_state_5d', 'MACD')
+                st.plotly_chart(plot_individual_signal(df_macd, 'MACD_state_5d', 'USD/KRW Spot with MACD 5-day Confirmed Signal'), use_container_width=True)
+
+                # 데이터 테이블 (내림차순)
+                st.subheader("📋 최근 데이터")
+                df_macd_display = df_macd[['Spot', 'MACD', 'Signal', 'MACD_state', 'MACD_state_5d']].tail(50).iloc[::-1]
+                df_macd_display.index = df_macd_display.index.strftime('%Y-%m-%d')
+                st.dataframe(df_macd_display, use_container_width=True)
+
+            # Basis Momentum 탭
+            if df_basis is not None:
+                with tab4:
+                    display_recent_signal_status(df_basis, 'signal', 'Basis Momentum')
+                    st.plotly_chart(plot_basis_momentum_individual(df_basis), use_container_width=True)
+
+                    # 데이터 테이블 (내림차순)
+                    st.subheader("📋 최근 데이터")
+                    df_basis_display = df_basis[['Spot', 'FWD1M', 'FWD3M', 'basis', 'forward_basis', 'basis_momentum', 'signal']].tail(24).iloc[::-1]
+                    df_basis_display.index = df_basis_display.index.strftime('%Y-%m-%d')
+                    st.dataframe(df_basis_display, use_container_width=True)
+            else:
+                with tab3:
                     st.error("❌ Basis Momentum 분석을 위해서는 FWD1M, FWD3M 컬럼이 필요합니다.")
-
+    
     else:
         st.info("👈 사이드바에서 Excel 파일을 업로드하여 분석을 시작하세요.")
 
