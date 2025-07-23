@@ -388,7 +388,7 @@ def main():
     uploaded_file = st.sidebar.file_uploader(
         "📁 Excel 파일 업로드",
         type=['xlsx', 'xls'],
-        help="usdkrw_approved_mod_v5.xlsx 형식의 파일을 업로드하세요"
+        help="usdkrw_app_mod_v6.xlsx 형식의 파일을 업로드하세요"
     )
 
     if uploaded_file is not None:
