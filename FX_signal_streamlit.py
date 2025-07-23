@@ -202,7 +202,7 @@ def plot_composite_signal(df_composite):
         y=df['spot'],
         mode='lines',
         name='USD/KRW Spot',
-        line=dict(color='black', width=2)
+        line=dict(color='royalblue', width=2)
     ))
 
     # 누적 막대그래프 - 3단계별 색상
@@ -291,39 +291,53 @@ def plot_individual_signal(df, signal_col, title):
     return fig
 
 def plot_basis_momentum_individual(df):
-    """Basis Momentum 개별 차트"""
+    """Basis Momentum 개별 차트 - 다른 차트들과 동일한 스타일로 통일"""
     fig = go.Figure()
 
-    # Spot 환율 라인
+    # 환율 라인 - 다른 차트들과 동일한 색상으로
     fig.add_trace(go.Scatter(
         x=df.index,
         y=df['Spot'],
         mode='lines',
-        name='Spot',
-        line=dict(width=2.5, color='black')
+        name='USD/KRW Spot',
+        line=dict(color='royalblue', width=2)
     ))
 
-    # Signal 구간 shade
-    signal_shift = df['signal'].shift(1)
-    change_points = df[signal_shift != df['signal']].index.tolist()
-    change_points = [df.index[0]] + change_points + [df.index[-1]]
+    # Signal ON/OFF - 다른 차트들과 동일한 스타일로
+    df_on = df[df['signal'] == 1]
+    df_off = df[df['signal'] == 0]
 
-    for i in range(len(change_points) - 1):
-        x0, x1 = change_points[i], change_points[i + 1]
-        current_signal = df.loc[x0, 'signal']
+    fig.add_trace(go.Bar(
+        x=df_on.index,
+        y=[1] * len(df_on),
+        name='Signal ON',
+        marker_color='crimson',
+        opacity=0.8,
+        yaxis='y2'
+    ))
 
-        fig.add_vrect(
-            x0=x0, x1=x1,
-            fillcolor='rgba(255, 0, 0, 0.1)' if current_signal == 1 else 'rgba(0, 200, 0, 0.08)',
-            layer='below', line_width=0
-        )
+    fig.add_trace(go.Bar(
+        x=df_off.index,
+        y=[1] * len(df_off),
+        name='Signal OFF',
+        marker_color='lightgray',
+        opacity=0.4,
+        yaxis='y2'
+    ))
 
     fig.update_layout(
-        title='현·선물 Basis Momentum',
-        xaxis_title='날짜',
-        yaxis_title='USD/KRW Spot',
-        height=600,
-        template='plotly_white'
+        title='USD/KRW Spot with Basis Momentum Signal',
+        xaxis_title='Date',
+        yaxis=dict(title='USD/KRW Spot'),
+        yaxis2=dict(
+            title='Signal',
+            overlaying='y',
+            side='right',
+            range=[0, 1.0],
+            showgrid=False
+        ),
+        legend=dict(x=0.01, y=0.99),
+        height=500
     )
 
     return fig
@@ -473,7 +487,7 @@ def main():
             else:
                 with tab3:
                     st.error("❌ Basis Momentum 분석을 위해서는 FWD1M, FWD3M 컬럼이 필요합니다.")
-    
+
     else:
         st.info("👈 사이드바에서 Excel 파일을 업로드하여 분석을 시작하세요.")
 
