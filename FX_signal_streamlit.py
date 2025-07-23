@@ -136,7 +136,7 @@ def calculate_basis_momentum(data):
 
     # basis 계산
     data_mon['basis'] = np.log(data_mon['FWD1M'] / data_mon['Spot'])
-    data_mon['forward_basis'] = np.log(data_mon['FWD2M'] / data_mon['FWD1M'])
+    data_mon['forward_basis'] = np.log(data_mon['FWD2M'].shift(-1) / data_mon['FWD1M'].shift(-1))
 
     # basis momentum
     n = 3
