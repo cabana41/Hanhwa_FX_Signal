@@ -136,7 +136,7 @@ def calculate_basis_momentum(data):
 
     # basis 계산
     data_mon['basis'] = np.log(data_mon['FWD1M'] / data_mon['Spot'])
-    data_mon['forward_basis'] = np.log(data_mon['FWD3M'] / data_mon['FWD1M'])
+    data_mon['forward_basis'] = np.log(data_mon['FWD2M'] / data_mon['FWD1M'])
 
     # basis momentum
     n = 3
@@ -411,7 +411,7 @@ def main():
 
                 # Basis momentum은 FWD 데이터가 있을 때만
                 df_basis = None
-                if 'FWD1M' in data.columns and 'FWD3M' in data.columns:
+                if 'FWD1M' in data.columns and 'FWD2M' in data.columns:
                     df_basis = calculate_basis_momentum(data)
 
             # 탭 생성 (4개 탭)
@@ -481,12 +481,12 @@ def main():
 
                     # 데이터 테이블 (내림차순)
                     st.subheader("📋 최근 데이터")
-                    df_basis_display = df_basis[['Spot', 'FWD1M', 'FWD3M', 'basis', 'forward_basis', 'basis_momentum', 'signal']].tail(24).iloc[::-1]
+                    df_basis_display = df_basis[['Spot', 'FWD1M', 'FWD2M', 'basis', 'forward_basis', 'basis_momentum', 'signal']].tail(24).iloc[::-1]
                     df_basis_display.index = df_basis_display.index.strftime('%Y-%m-%d')
                     st.dataframe(df_basis_display, use_container_width=True)
             else:
                 with tab3:
-                    st.error("❌ Basis Momentum 분석을 위해서는 FWD1M, FWD3M 컬럼이 필요합니다.")
+                    st.error("❌ Basis Momentum 분석을 위해서는 FWD1M, FWD2M 컬럼이 필요합니다.")
 
     else:
         st.info("👈 사이드바에서 Excel 파일을 업로드하여 분석을 시작하세요.")
@@ -496,7 +496,7 @@ def main():
         ### 📋 필요한 데이터 구조
         업로드할 Excel 파일은 다음과 같은 구조여야 합니다:
 
-        | Date | Spot | FWD1M | FWD3M |
+        | Date | Spot | FWD1M | FWD2M |
         |------|------|-------|-------|
         | 2015-01-02 | 1100.45 | 1102.34 | 1105.67 |
         | 2015-01-05 | 1098.23 | 1100.12 | 1103.45 |
@@ -505,7 +505,7 @@ def main():
         - **Date**: 날짜 (인덱스)
         - **Spot**: 현물 환율
         - **FWD1M**: 1개월 선물 환율 (Basis Momentum 분석용)
-        - **FWD3M**: 3개월 선물 환율 (Basis Momentum 분석용)
+        - **FWD2M**: 3개월 선물 환율 (Basis Momentum 분석용)
         """)
 
 if __name__ == "__main__":
